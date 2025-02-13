@@ -1,0 +1,102 @@
+# Ignore local notes/TODO
+api-key
+*.txt
+.env
+
+# Ignore all files in the site-packages directory created by pip install
+/site-packages/
+/lib/
+/lib64/
+/env/
+/venv/
+/.venv/
+/ENV/
+/.ENV/
+/__pycache__/
+**/__pycache__/
+/*.py[cod]
+*$py.class
+
+# Ignore virtual environment folders
+/venv/
+/env/
+/.venv/
+/.venv.bak/
+/ENV/
+/env.bak/
+/venv.bak/
+
+# Ignore log files
+log.txt
+log*.txt
+log*.json
+
+# Ignore other common files and directories
+.DS_Store
+*.egg
+*.egg-info/
+.eggs/
+*.pip
+pip-log.txt
+pip-delete-this-directory.txt
+
+# Ignore Python specific files
+*.py[cod]
+*$py.class
+
+# Ignore Byte-compiled / optimized / DLL files
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Ignore Distribution / packaging
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Ignore Installer logs
+pip-log.txt
+pip-delete-this-directory.txt
+
+# Ignore Unit test / coverage reports
+htmlcov/
+.tox/
+.nox/
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+*.py,cover
+.hypothesis/
+
+# Ignore Jupyter Notebook files
+.ipynb_checkpoints
+
+# Ignore pyenv files
+.python-version
+
+# Ignore mypy files
+.mypy_cache/
+.dmypy.json
+dmypy.json
+
+# Ignore Pyre type checker
+.pyre/
