@@ -1,7 +1,7 @@
 from setuptools import setup, find_packages
 
 setup(
-    name="RIMWeightingPandas",
+    name="rimweighting",
     version="0.1.0",
     author="Amit Mohite",
     author_email="amit.mohite@outlook.com",
