@@ -12,22 +12,6 @@ This method is used to adjust the weights of survey data so that they align with
 - Provides convergence checks to ensure that weights stabilize within specified bounds.
 - Includes functionality to handle pre-existing weights and apply iterative adjustments.
 
-## Installation
-
-To install, use the following command:
-
-```bash
-pip install git+https://github.com/mohiteamit/rim-weighting.git
-```
-
-Alternatively, you can clone the repository and install it manually:
-
-```bash
-git clone https://github.com/mohiteamit/rim-weighting.git
-cd rim-weighting
-pip install .
-```
-
 ## Usage
 
 ### Importing and Initializing the Class
@@ -52,10 +36,10 @@ spec = {
 }
 
 # Initialize the RIMWeightingPandas object
-rim_weighting = RIMWeightingPandas(data, spec, pre_weight='weight')
+rim = RIMWeightingPandas(data, spec, pre_weight='weight')
 
 # Apply RIM weighting
-weighted_data = rim_weighting.apply_weights()
+weighted_data = rim.apply_weights()
 ```
 
 ### Detailed Explanation of Methods
@@ -95,8 +79,25 @@ weighted_data = rim_weighting.apply_weights()
 After applying the RIM weighting, you can generate a summary of your data:
 
 ```python
-rim_weighting.generate_summary()
+rim.generate_summary()
 ```
+
+# Installation
+
+To install, use the following command:
+
+```bash
+pip install git+https://github.com/mohiteamit/rim-weighting.git
+```
+
+Alternatively, you can clone the repository and install it manually:
+
+```bash
+git clone https://github.com/mohiteamit/rim-weighting.git
+cd rim-weighting
+pip install .
+```
+
 
 This will display a formatted summary showing the unweighted and weighted counts for each variable.
 

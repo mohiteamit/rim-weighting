@@ -18,7 +18,7 @@ It supports both **Pandas** (for small datasets) and **PySpark** (for large-scal
 ## 🚀 Installation
 To install the package:
 ```bash
-pip install rim-weighting
+pip install git+https://github.com/mohiteamit/rim-weighting.git
 ```
 
 ## 🔍 Testing
