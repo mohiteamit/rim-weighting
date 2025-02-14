@@ -1,6 +1,3 @@
-# RIMWeightingPySpark
-- This work is pending
-
 # RIMWeightingPandas
 
 **RIMWeightingPandas** is a Python implementation of the **Random Iterative Method (RIM)** weighting algorithm, as described in the paper:
@@ -17,10 +14,10 @@ This method is used to adjust the weights of survey data so that they align with
 
 ## Installation
 
-To install **RIMWeightingPandas**, use the following command:
+To install, use the following command:
 
 ```bash
-pip install RIMWeightingPandas
+pip install git+https://github.com/mohiteamit/rim-weighting.git
 ```
 
 Alternatively, you can clone the repository and install it manually:
@@ -89,7 +86,11 @@ weighted_data = rim_weighting.apply_weights()
   - Weighted counts & percentages.
   - Min/Max weights per category.
 
-## Example Output
+# RIMWeightingPySpark
+- This code is written by ChatGPT 4o based on RIMWeightingPandas
+- This code is untested
+
+# Example Output
 
 After applying the RIM weighting, you can generate a summary of your data:
 
@@ -99,10 +100,10 @@ rim_weighting.generate_summary()
 
 This will display a formatted summary showing the unweighted and weighted counts for each variable.
 
-## Contributing
+# Contributing
 
 I welcome contributions! If you'd like to help improve this project, feel free to fork the repository and submit a pull request.
 
-## License
+# License
 
 This project is licensed under the **MIT License**. You can freely use, modify, and distribute this code. However, **you must provide appropriate credit** by mentioning this repository in any usage of the code. For more details, see the `LICENSE` file.
