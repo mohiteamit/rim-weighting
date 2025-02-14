@@ -77,12 +77,12 @@ weighted_data = rim_weighting.apply_weights()
   - **Returns**: The DataFrame with the adjusted `rim_weight` column.
 
 - **`weighting_efficiency()`**: Computes the RIM weighting efficiency as a percentage, based on the formula:
-  
-  \[
-  \text{Efficiency (\%)} = \frac{ \left( \sum (P_j \times R_j) \right)^2 }{ \sum P_j \times \sum P_j \times (R_j^2) }
-  \]
 
-  where \( P_j \) are the pre-weights and \( R_j \) are the adjusted rim weights.
+  $$
+  \text{Efficiency (\%)} = \frac{\left( \sum (P_j \times R_j) \right)^2 }{\sum P_j \times \sum P_j \times (R_j^2) }
+  $$
+
+  where $P_j$ are the pre-weights and $R_j$ are the adjusted rim weights.
 
 - **`generate_summary()`**: Generates a summary of the unweighted and weighted counts per variable, including:
   - Unweighted counts & percentages.
