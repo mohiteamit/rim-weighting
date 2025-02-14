@@ -71,7 +71,7 @@ weighted_data = rim.apply_weights()
   - Min/Max weights per category.
 
 # RIMWeightingPySpark
-- This code is written by ChatGPT 4o based on RIMWeightingPandas
+- This code is written by ChatGPT o3-mini-high based on RIMWeightingPandas
 - This code is untested
 
 # Example Output
