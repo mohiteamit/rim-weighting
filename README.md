@@ -1,8 +1,3 @@
-Here's a detailed **README** for your project, which explains how to use `RIMWeightingPandas`, mentions the Deming-Stephan paper, and provides licensing details. I'll also suggest an appropriate license.
-
-### README
-
-```markdown
 # RIMWeightingPySpark
 - This work is pending
 
@@ -111,4 +106,3 @@ I welcome contributions! If you'd like to help improve this project, feel free t
 ## License
 
 This project is licensed under the **MIT License**. You can freely use, modify, and distribute this code. However, **you must provide appropriate credit** by mentioning this repository in any usage of the code. For more details, see the `LICENSE` file.
-
