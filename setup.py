@@ -2,7 +2,7 @@ from setuptools import setup, find_packages
 
 setup(
     name="rim_weighting",
-    version="0.1.0",
+    version="0.1.1",
     author="Amit Mohite",
     author_email="amit.mohite@outlook.com",
     description="A Python implementation of the Random Iterative Method (RIM) weighting algorithm for survey data adjustment.",
