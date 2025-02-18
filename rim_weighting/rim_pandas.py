@@ -167,7 +167,7 @@ class RIMWeightingPandas:
 
             # 6. Check if RMS error is below tolerance => Converged
             if rms_error < self.tolerance:
-                print(f"✅ Converged by RMS error < {self.tolerance} in {iteration + 1} iterations.")
+                print(f"✅ Converged by `RMS error < {self.tolerance} (tolerance)` in {iteration + 1} iterations.")
                 break
 
         return self.data
