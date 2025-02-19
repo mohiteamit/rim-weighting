@@ -9,8 +9,9 @@ class RIMWeightingPandas:
         data: pd.DataFrame,
         spec: Dict,
         pre_weight: str = None,
-        tolerance: float = 0.001,
-        weight_col_name: str = 'rim_weight'
+        tolerance: float = 0.005,
+        weight_col_name: str = 'rim_weight',
+        target: float = None
     ):
         """
         Initialize the RIM weighting class.
@@ -22,17 +23,20 @@ class RIMWeightingPandas:
         - pre_weight: Column name containing existing weights (if None, defaults to 1.0 for all).
         - tolerance: Convergence threshold for RMS error.
         - weight_col_name: Name of the weight column in the DataFrame.
+        - target: Desired total weighted sum. If set to None, defaults to the actual number of records.
         """
         self.data = data.copy(deep=True)
         self.spec = spec
         self.tolerance = tolerance
         self.weight_col_name = weight_col_name
         self.total_sample = len(self.data)  # fixed reference for proportion scaling
+        # Set target to provided value or default to the number of records
+        self.target = target if target is not None else self.total_sample
 
-        # Validate specification
+        # Validate the specification
         self.validate_spec()
 
-        # Convert any proportions in spec to absolute counts exactly once
+        # Convert any proportions in spec to absolute counts (only once)
         self.convert_targets_to_counts()
 
         # Set pre-weight column
@@ -42,11 +46,10 @@ class RIMWeightingPandas:
         else:
             self.pre_weight_col_name = pre_weight
 
-        # Initialize rim weight column based on pre-weight
+        # Initialize rim weight column based on pre-weight (or default to 1.0)
         if pre_weight:
             self.data[self.weight_col_name] = self.data[self.pre_weight_col_name]
         else:
-            # If no pre_weight, default to 1.0
             self.data[self.weight_col_name] = 1.0
 
     def validate_spec(self):
@@ -71,8 +74,7 @@ class RIMWeightingPandas:
             missing_categories = [cat for cat in targets.keys() if cat not in unique_categories]
             if missing_categories:
                 raise ValueError(
-                    f"❌ Categories {missing_categories} in spec for variable '{var}' "
-                    "do not exist in the data."
+                    f"❌ Categories {missing_categories} in spec for variable '{var}' do not exist in the data."
                 )
 
             # 4. If the user is passing proportions, ensure they sum to ~1.0
@@ -81,24 +83,21 @@ class RIMWeightingPandas:
                 total_target = sum(targets.values())
                 if not np.isclose(total_target, 1.0, atol=1e-6):
                     raise ValueError(
-                        f"❌ Target proportions for '{var}' sum to {total_target:.6f}, "
-                        "but must sum to exactly 1.0."
+                        f"❌ Target proportions for '{var}' sum to {total_target:.6f}, but must sum to exactly 1.0."
                     )
 
     def convert_targets_to_counts(self):
         """
         Convert any proportions in self.spec to absolute counts (i.e., multiply by total_sample).
-        We do this exactly once to avoid re-scaling on every iteration.
+        This is done exactly once to avoid re-scaling on every iteration.
         """
         for var, targets in self.spec.items():
-            # If the first value is in [0,1], assume these are proportions
+            # If the first value is between 0 and 1, assume these are proportions
             first_val = next(iter(targets.values()))
             if 0 <= first_val <= 1:
-                self.spec[var] = {
-                    k: v * self.total_sample for k, v in targets.items()
-                }
+                self.spec[var] = {k: v * self.total_sample for k, v in targets.items()}
 
-    def apply_weights(self, max_iterations=30, min_weight=0.5, max_weight=1.5) -> pd.DataFrame:
+    def apply_weights(self, max_iterations=12, min_weight=0.6, max_weight=1.4) -> pd.DataFrame:
         """
         Applies RIM weighting using an iterative approach with RMS-error-based convergence.
 
@@ -111,7 +110,7 @@ class RIMWeightingPandas:
         - pd.DataFrame: The original DataFrame with the updated `rim_weight` column.
         """
         for iteration in range(max_iterations):
-            # 1. Iteratively adjust for each variable
+            # 1. Iteratively adjust weights for each variable based on the targets
             for var, targets in self.spec.items():
                 # Current weighted totals by category
                 current_totals = self.data.groupby(var)[self.weight_col_name].sum()
@@ -123,19 +122,19 @@ class RIMWeightingPandas:
                     if observed > 0:
                         adjustment_factors[cat] = target_value / observed
                     else:
-                        # If zero observed in that category, set factor=1 or skip
+                        # If no observations for the category, use a neutral factor of 1.0
                         adjustment_factors[cat] = 1.0
 
-                # Apply the factor to each row
+                # Apply the adjustment factor to each row for the variable
                 self.data[self.weight_col_name] *= self.data[var].map(adjustment_factors).fillna(1.0)
 
-            # 2. Normalize total weights to match total_sample
+            # 2. Normalize total weights to match the target sum
             total_weight_sum = self.data[self.weight_col_name].sum()
             if total_weight_sum > 0:
-                scale_factor = self.total_sample / total_weight_sum
+                scale_factor = self.target / total_weight_sum
                 self.data[self.weight_col_name] *= scale_factor
 
-            # 3. Clip weights to [min_weight, max_weight]
+            # 3. Clip weights to the range [min_weight, max_weight]
             self.data[self.weight_col_name] = np.clip(
                 self.data[self.weight_col_name],
                 min_weight,
@@ -150,7 +149,7 @@ class RIMWeightingPandas:
                     observed = weighted_totals.get(cat, 0)
                     rms_error += (target_value - observed) ** 2
 
-            # Average and take sqrt
+            # Average the squared errors and take the square root
             rms_error = np.sqrt(rms_error / len(self.spec))
 
             # 5. Print iteration diagnostics
@@ -165,30 +164,28 @@ class RIMWeightingPandas:
                 f"Min Weight = {min_weight_value:.4f}"
             )
 
-            # 6. Check if RMS error is below tolerance => Converged
+            # 6. Check if RMS error is below tolerance; if so, break out of the loop
             if rms_error < self.tolerance:
-                print(f"✅ Converged by `RMS error < {self.tolerance} (tolerance)` in {iteration + 1} iterations.")
+                print(f"✅ Converged by `RMS error < {self.tolerance}` in {iteration + 1} iterations.")
                 break
 
         return self.data
 
     def weighting_efficiency(self):
         """
-        Computes the rim weighting efficiency as per the given formula:
+        Computes the RIM weighting efficiency as per the given formula:
 
             Efficiency (%) = 100 * ( Σ(Pj * Rj) )^2  /  ( Σ(Pj) * Σ(Pj * Rj^2) )
 
         where:
-        - Pj is the pre-weight for case j (before rim weighting).
-        - Rj is the rim weight for case j (after rim weighting).
-
-        If pre_weight column does not exist, it initializes all values to 1.
+        - Pj is the pre-weight for each case (before RIM weighting).
+        - Rj is the RIM weight for each case (after weighting).
 
         Returns:
-            float: Rim weighting efficiency percentage.
+            float: RIM weighting efficiency percentage.
         """
         Pj = self.data[self.pre_weight_col_name]  # pre-weight
-        Rj = self.data[self.weight_col_name]       # rim weight
+        Rj = self.data[self.weight_col_name]       # RIM weight
 
         numerator = (np.sum(Pj * Rj)) ** 2
         denominator = np.sum(Pj) * np.sum(Pj * (Rj ** 2))
@@ -202,20 +199,20 @@ class RIMWeightingPandas:
         """
         Generates and prints a formatted summary of unweighted and weighted counts per variable.
 
-        Includes:
-        - Unweighted counts & percentages
-        - Weighted counts & percentages
-        - Min/Max weights per category
+        The summary includes:
+        - Unweighted counts and percentages.
+        - Weighted counts and percentages.
+        - Minimum and maximum weights per category.
         """
         for var in self.spec.keys():
-            # Unweighted counts
+            # Calculate unweighted counts
             unweighted_df = self.data[var].value_counts(dropna=False).reset_index()
             unweighted_df.columns = [var, "Unweighted Count"]
             unweighted_df["Unweighted %"] = (
                 unweighted_df["Unweighted Count"] / unweighted_df["Unweighted Count"].sum()
             ) * 100
 
-            # Weighted counts & min/max weights
+            # Calculate weighted counts and weight range
             weighted_stats = self.data.groupby(var).agg(
                 Weighted_Count=(self.weight_col_name, "sum"),
                 Min_Weight=(self.weight_col_name, "min"),
@@ -226,9 +223,9 @@ class RIMWeightingPandas:
                 weighted_stats["Weighted_Count"] / weighted_stats["Weighted_Count"].sum()
             ) * 100
 
-            # Merge to align categories correctly
+            # Merge the unweighted and weighted data for a complete summary
             summary_df = pd.merge(unweighted_df, weighted_stats, on=var, how="outer").fillna(0)
 
-            # Print the summary using tabulate
+            # Print the summary table using tabulate
             print(tabulate(summary_df, headers="keys", tablefmt="github", floatfmt=".4f"))
-            print("\n")  # extra line for clarity
+            print("\n")  # Extra line for clarity
