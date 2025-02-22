@@ -3,11 +3,17 @@ import pandas as pd
 import numpy as np
 from tabulate import tabulate
 
+from typing import Dict
+import pandas as pd
+import numpy as np
+from tabulate import tabulate
+
 class RIMWeightingPandas:
     def __init__(
         self,
         data: pd.DataFrame,
         spec: Dict,
+        id: str,
         pre_weight: str = None,
         tolerance: float = 0.005,
         weight_col_name: str = 'rim_weight',
@@ -20,13 +26,22 @@ class RIMWeightingPandas:
         - data: Pandas DataFrame with survey data.
         - spec: Dictionary with variable names as keys and target distributions as values.
           Each value is itself a dict { category_name: proportion or absolute_count }.
+        - id: Column name to be used as a unique identifier.
         - pre_weight: Column name containing existing weights (if None, defaults to 1.0 for all).
         - tolerance: Convergence threshold for RMS error.
         - weight_col_name: Name of the weight column in the DataFrame.
         - target: Desired total weighted sum. If set to None, defaults to the actual number of records.
         """
+        if id not in data.columns:
+            raise ValueError(f"❌ ID column '{id}' does not exist in the dataset.")
+        if data[id].isnull().any():
+            raise ValueError(f"❌ ID column '{id}' contains null values.")
+        if data[id].duplicated().any():
+            raise ValueError(f"❌ ID column '{id}' must be unique per row.")
+
         self.data = data.copy(deep=True)
         self.spec = spec
+        self.id = id
         self.tolerance = tolerance
         self.weight_col_name = weight_col_name
         self.total_sample = len(self.data)  # fixed reference for proportion scaling
@@ -51,6 +66,12 @@ class RIMWeightingPandas:
             self.data[self.weight_col_name] = self.data[self.pre_weight_col_name]
         else:
             self.data[self.weight_col_name] = 1.0
+
+    def get_weighted_factors(self):
+        """
+        Returns a DataFrame with the ID column as the index and the weight column.
+        """
+        return self.data.set_index(self.id)[[self.weight_col_name]]
 
     def validate_spec(self):
         """
