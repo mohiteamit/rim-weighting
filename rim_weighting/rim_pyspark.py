@@ -1,300 +1,249 @@
-import pyspark.sql.functions as F
-from pyspark.sql import DataFrame
 from typing import Dict
+import numpy as np
+import pandas as pd
+from tabulate import tabulate
+
+from pyspark.sql import DataFrame
+from pyspark.sql import functions as F
+from pyspark.sql.functions import lit, when
+from pyspark.sql.types import DoubleType
 
 class RIMWeightingPySpark:
     def __init__(
         self,
-        df: DataFrame,
+        data: DataFrame,
         spec: Dict,
         pre_weight: str = None,
-        tolerance: float = 0.001,
-        weight_col_name: str = 'rim_weight'
+        tolerance: float = 0.005,
+        weight_col_name: str = 'rim_weight',
+        target: float = None
     ):
         """
-        Initialize the RIM weighting class for Spark DataFrame.
+        Initialize the RIM weighting class using PySpark DataFrame.
 
-        :param df: Spark DataFrame with survey data
-        :param spec: Dict with {variable_name: {category: proportion_or_count}}
-        :param pre_weight: Name of column containing existing weights (optional)
-        :param tolerance: Convergence threshold for RMS error
-        :param weight_col_name: Name of the final weight column
+        Parameters:
+        - data: PySpark DataFrame with survey data.
+        - spec: Dictionary with variable names as keys and target distributions as values.
+          Each value is itself a dict { category_name: proportion or absolute_count }.
+        - pre_weight: Column name containing existing weights (if None, defaults to 1.0 for all).
+        - tolerance: Convergence threshold for RMS error.
+        - weight_col_name: Name of the weight column in the DataFrame.
+        - target: Desired total weighted sum. If set to None, defaults to the actual number of records.
         """
-        self.spark = df.sparkSession
-        self.df = df
+        # Save a reference to the Spark DataFrame.
+        self.data = data
         self.spec = spec
         self.tolerance = tolerance
         self.weight_col_name = weight_col_name
+        # Total sample size is fixed (using count)
+        self.total_sample = self.data.count()
+        self.target = target if target is not None else self.total_sample
 
-        # We'll treat "total_sample" as the total row count
-        self.total_sample = self.df.count()
-
-        # Validate specification
+        # Validate the specification against the dataset.
         self.validate_spec()
 
-        # Convert any proportions in spec to absolute counts exactly once
+        # Convert any proportions in spec to absolute counts (once)
         self.convert_targets_to_counts()
 
-        # If no pre_weight or it's not in columns, create one = 1.0
-        if pre_weight is None or pre_weight not in self.df.columns:
+        # Set pre-weight column: if not provided (or not found), add a column with constant 1.0
+        if pre_weight is None or pre_weight not in self.data.columns:
+            self.data = self.data.withColumn("pre_weight", lit(1.0))
             self.pre_weight_col_name = "pre_weight"
-            self.df = self.df.withColumn(self.pre_weight_col_name, F.lit(1.0))
         else:
             self.pre_weight_col_name = pre_weight
 
-        # Initialize the rim_weight column
-        if pre_weight and (pre_weight in self.df.columns):
-            self.df = self.df.withColumn(self.weight_col_name, F.col(self.pre_weight_col_name))
+        # Initialize the rim weight column: use pre_weight values if available, else default to 1.0.
+        if self.pre_weight_col_name in self.data.columns:
+            self.data = self.data.withColumn(self.weight_col_name, F.col(self.pre_weight_col_name))
         else:
-            self.df = self.df.withColumn(self.weight_col_name, F.lit(1.0))
+            self.data = self.data.withColumn(self.weight_col_name, lit(1.0))
 
     def validate_spec(self):
         """
-        Validate that each variable in spec exists and that categories exist in the data.
-        Also check if proportions sum to 1.0 (if the first entry is between 0 and 1).
+        Validates the specification dictionary (self.spec) against the dataset.
+
+        Raises:
+        - ValueError if variables in spec do not exist in data.
+        - ValueError if any categories in spec do not exist in the corresponding variable in data.
+        - ValueError if the sum of all target proportions for any variable does not equal 1.0
+          (only checked if they look like proportions).
         """
-        df_cols = self.df.columns
-
         for var, targets in self.spec.items():
-            # 1. Check if var is in df
-            if var not in df_cols:
-                raise ValueError(f"❌ Variable '{var}' in spec does not exist in the DataFrame.")
-
-            # 2. Collect distinct categories from Spark
-            unique_cats = [r[var] for r in self.df.select(var).distinct().collect() if r[var] is not None]
-
-            # 3. Check missing categories
-            missing_cats = [c for c in targets.keys() if c not in unique_cats]
-            if missing_cats:
+            # 1. Check if variable exists in data.
+            if var not in self.data.columns:
+                raise ValueError(f"❌ Variable '{var}' in spec does not exist in the data.")
+            
+            # 2. Get unique categories from the Spark DataFrame.
+            unique_categories = [row[var] for row in self.data.select(var).distinct().collect() if row[var] is not None]
+            
+            # 3. Check if all specified categories exist in the data.
+            missing_categories = [cat for cat in targets.keys() if cat not in unique_categories]
+            if missing_categories:
                 raise ValueError(
-                    f"❌ Categories {missing_cats} in spec for variable '{var}' do not exist in the data."
+                    f"❌ Categories {missing_categories} in spec for variable '{var}' do not exist in the data."
                 )
-
-            # 4. If first value is in [0,1], assume proportions => check sum ~ 1.0
+            
+            # 4. If targets appear to be proportions, they must sum to 1.0.
             first_val = next(iter(targets.values()))
             if 0 <= first_val <= 1:
                 total_target = sum(targets.values())
-                if abs(total_target - 1.0) > 1e-6:
+                if not np.isclose(total_target, 1.0, atol=1e-6):
                     raise ValueError(
-                        f"❌ Target proportions for '{var}' sum to {total_target:.6f}, must be ~1.0"
+                        f"❌ Target proportions for '{var}' sum to {total_target:.6f}, but must sum to exactly 1.0."
                     )
 
     def convert_targets_to_counts(self):
         """
-        Convert proportion-based targets in self.spec to absolute counts once.
+        Convert any proportions in self.spec to absolute counts (i.e., multiply by total_sample).
+        This is done exactly once to avoid re-scaling on every iteration.
         """
         for var, targets in self.spec.items():
             first_val = next(iter(targets.values()))
             if 0 <= first_val <= 1:
-                # Convert to absolute counts
                 self.spec[var] = {k: v * self.total_sample for k, v in targets.items()}
 
-    def apply_weights(self, max_iterations=30, min_weight=0.5, max_weight=1.5) -> DataFrame:
+    def apply_weights(self, max_iterations=12, min_weight=0.6, max_weight=1.4) -> DataFrame:
         """
-        Iteratively apply RIM weighting, capping each iteration, stopping when RMS error < tolerance
-        or max_iterations is reached.
+        Applies RIM weighting using an iterative approach with RMS-error-based convergence.
 
-        :param max_iterations: Maximum number of iterations
-        :param min_weight: Minimum allowable weight
-        :param max_weight: Maximum allowable weight
-        :return: Spark DataFrame with updated rim_weight column
+        Parameters:
+        - max_iterations (int): Maximum number of iterations allowed for weight adjustments.
+        - min_weight (float): Minimum allowable weight for each observation.
+        - max_weight (float): Maximum allowable weight for each observation.
+
+        Returns:
+        - DataFrame: The original DataFrame with the updated `rim_weight` column.
         """
         for iteration in range(max_iterations):
-            # For each variable in the spec, compute adjustment factors and update weights
+            # Iteratively adjust weights for each variable in the spec.
             for var, targets in self.spec.items():
-                # 1. Get the sum of current weights by category
-                sum_df = (
-                    self.df
-                    .groupBy(var)
-                    .agg(F.sum(self.weight_col_name).alias("observed_sum"))
-                )
+                # Compute current weighted totals by category.
+                totals = self.data.groupBy(var).agg(F.sum(self.weight_col_name).alias("total")).collect()
+                totals_dict = {row[var]: row["total"] for row in totals}
 
-                # 2. Build a small DF of target values for each category
-                #    (category -> target_count)
-                target_rows = [(cat, float(targets[cat])) for cat in targets]
-                target_schema = f"{var} string, target_count double"
-                targets_df = self.spark.createDataFrame(target_rows, target_schema)
+                # Compute adjustment factors = (target_count / observed_count)
+                adjustment_factors = {}
+                for cat, target_value in targets.items():
+                    observed = totals_dict.get(cat, 0)
+                    if observed > 0:
+                        adjustment_factors[cat] = target_value / observed
+                    else:
+                        adjustment_factors[cat] = 1.0
 
-                # 3. Join sums_df and targets_df to compute factor = target_count / observed_sum
-                factor_df = (
-                    sum_df.join(targets_df, on=var, how="left")
-                    .withColumn(
-                        "factor",
-                        F.when(F.col("observed_sum") > 0,
-                               F.col("target_count") / F.col("observed_sum"))
-                         .otherwise(F.lit(1.0))
-                    )
-                    .select(var, "factor")
-                )
+                # Define a UDF to map each row's category to its adjustment factor.
+                def adjust(cat):
+                    return float(adjustment_factors.get(cat, 1.0))
+                adjust_udf = F.udf(adjust, DoubleType())
 
-                # 4. Join factor_df back to main df, multiply existing weight by factor
-                #    We do a left join on var. If there's no match, factor defaults to 1.0
-                self.df = (
-                    self.df.join(factor_df, on=var, how="left")
-                    .withColumn(
-                        self.weight_col_name,
-                        F.col(self.weight_col_name) * F.coalesce(F.col("factor"), F.lit(1.0))
-                    )
-                    .drop("factor")  # remove temp column
-                )
-
-            # 5. Normalize total weights to match self.total_sample
-            total_weight_sum = self.df.agg(F.sum(self.weight_col_name)).collect()[0][0]
-            if total_weight_sum and total_weight_sum != 0:
-                scale_factor = self.total_sample / total_weight_sum
-                self.df = self.df.withColumn(
+                # Multiply the current weight by the adjustment factor for the given variable.
+                self.data = self.data.withColumn(
                     self.weight_col_name,
-                    F.col(self.weight_col_name) * F.lit(scale_factor)
+                    F.col(self.weight_col_name) * adjust_udf(F.col(var))
                 )
 
-            # 6. Clip weights to [min_weight, max_weight]
-            self.df = self.df.withColumn(
+            # Normalize total weights to match the target sum.
+            total_weight_sum = self.data.agg(F.sum(self.weight_col_name).alias("sum")).collect()[0]["sum"]
+            if total_weight_sum > 0:
+                scale_factor = self.target / total_weight_sum
+                self.data = self.data.withColumn(
+                    self.weight_col_name,
+                    F.col(self.weight_col_name) * lit(scale_factor)
+                )
+
+            # Clip weights to the range [min_weight, max_weight].
+            self.data = self.data.withColumn(
                 self.weight_col_name,
-                F.when(F.col(self.weight_col_name) < min_weight, min_weight)
-                 .when(F.col(self.weight_col_name) > max_weight, max_weight)
-                 .otherwise(F.col(self.weight_col_name))
+                when(F.col(self.weight_col_name) < lit(min_weight), lit(min_weight))
+                .when(F.col(self.weight_col_name) > lit(max_weight), lit(max_weight))
+                .otherwise(F.col(self.weight_col_name))
             )
 
-            # 7. Compute RMS error
-            rms_error = self.compute_rms_error()
+            # Compute RMS error across all variables.
+            rms_error_sum = 0.0
+            for var, targets in self.spec.items():
+                weighted_totals = self.data.groupBy(var).agg(F.sum(self.weight_col_name).alias("weighted_total")).collect()
+                weighted_dict = {row[var]: row["weighted_total"] for row in weighted_totals}
+                for cat, target_value in targets.items():
+                    observed = weighted_dict.get(cat, 0)
+                    rms_error_sum += (target_value - observed) ** 2
+            rms_error = np.sqrt(rms_error_sum / len(self.spec))
 
-            # 8. Print iteration info
-            max_w = self.df.agg(F.max(self.weight_col_name)).collect()[0][0]
-            min_w = self.df.agg(F.min(self.weight_col_name)).collect()[0][0]
+            # Diagnostics: maximum and minimum weights.
+            max_weight_value = self.data.agg(F.max(self.weight_col_name).alias("max")).collect()[0]["max"]
+            min_weight_value = self.data.agg(F.min(self.weight_col_name).alias("min")).collect()[0]["min"]
             efficiency = self.weighting_efficiency()
 
             print(
                 f"Iteration {iteration + 1}: "
                 f"RMS Error = {rms_error:.6f}, "
                 f"Efficiency = {efficiency:.2f}%, "
-                f"Max Weight = {max_w:.4f}, "
-                f"Min Weight = {min_w:.4f}"
+                f"Max Weight = {max_weight_value:.4f}, "
+                f"Min Weight = {min_weight_value:.4f}"
             )
 
-            # 9. Check convergence by RMS error
+            # Check for convergence.
             if rms_error < self.tolerance:
-                print(f"✅ Converged by RMS error < {self.tolerance} in {iteration + 1} iterations.")
+                print(f"✅ Converged by `RMS error < {self.tolerance}` in {iteration + 1} iterations.")
                 break
 
-        return self.df
+        return self.data
 
-    def compute_rms_error(self) -> float:
+    def weighting_efficiency(self):
         """
-        Compute RMS error across all variables:
-            sqrt( (Sum over all var/cat of (target - observed)^2 ) / number_of_vars )
+        Computes the RIM weighting efficiency as per the given formula:
+
+            Efficiency (%) = 100 * ( Σ(Pj * Rj) )^2  /  ( Σ(Pj) * Σ(Pj * Rj^2) )
+
+        where:
+        - Pj is the pre-weight for each case (before RIM weighting).
+        - Rj is the RIM weight for each case (after weighting).
+
+        Returns:
+            float: RIM weighting efficiency percentage.
         """
-        import math
+        # Compute sum(Pj * Rj)
+        sum_PR = self.data.withColumn("prod", F.col(self.pre_weight_col_name) * F.col(self.weight_col_name)) \
+                          .agg(F.sum("prod").alias("sum_PR")).collect()[0]["sum_PR"]
+        # Compute sum(Pj)
+        sum_P = self.data.agg(F.sum(self.pre_weight_col_name).alias("sum_P")).collect()[0]["sum_P"]
+        # Compute sum(Pj * Rj^2)
+        sum_PR2 = self.data.withColumn("prod2", F.col(self.pre_weight_col_name) * (F.col(self.weight_col_name) ** 2)) \
+                           .agg(F.sum("prod2").alias("sum_PR2")).collect()[0]["sum_PR2"]
 
-        sum_sq = 0.0
-        # We'll do one pass per variable in Python
-        for var, targets in self.spec.items():
-            # Weighted sum by category
-            sums = (
-                self.df.groupBy(var)
-                .agg(F.sum(self.weight_col_name).alias("weighted_sum"))
-                .collect()
-            )
-            cat_to_observed = {row[var]: row["weighted_sum"] for row in sums}
+        numerator = sum_PR ** 2
+        denominator = sum_P * sum_PR2
 
-            # Accumulate squared differences
-            for cat, target_value in targets.items():
-                observed = cat_to_observed.get(cat, 0.0)
-                diff = target_value - observed
-                sum_sq += diff * diff
-
-        # average across number of variables
-        n_vars = len(self.spec)
-        return math.sqrt(sum_sq / n_vars) if n_vars else 0.0
-
-    def weighting_efficiency(self) -> float:
-        """
-        Efficiency (%) = 100 * ( Σ(Pj * Rj) )^2  /  ( Σ(Pj) * Σ(Pj * Rj^2) )
-        where Pj is pre_weight, Rj is rim_weight.
-        """
-        import math
-
-        # We'll do a single row aggregation:
-        # sum_pre = Σ(Pj)
-        # sum_pre_rim = Σ(Pj * Rj)
-        # sum_pre_rim2 = Σ(Pj * Rj^2)
-        agg_row = (
-            self.df.agg(
-                F.sum(F.col(self.pre_weight_col_name)).alias("sum_pre"),
-                F.sum(F.col(self.pre_weight_col_name) * F.col(self.weight_col_name)).alias("sum_pre_rim"),
-                F.sum(F.col(self.pre_weight_col_name) * (F.col(self.weight_col_name) ** 2)).alias("sum_pre_rim2"),
-            )
-            .collect()[0]
-        )
-        sum_pre = agg_row["sum_pre"]
-        sum_pre_rim = agg_row["sum_pre_rim"]
-        sum_pre_rim2 = agg_row["sum_pre_rim2"]
-
-        if sum_pre is None or sum_pre == 0:
-            return 0.0
-
-        numerator = (sum_pre_rim ** 2)
-        denominator = sum_pre * sum_pre_rim2
         if denominator == 0:
             return 0.0
+
         return 100.0 * (numerator / denominator)
 
     def generate_summary(self):
         """
-        Print unweighted/weighted counts per variable, plus min/max weight by category.
-        Note: We'll collect results for display in Python, so this is not super scalable.
+        Generates and prints a formatted summary of unweighted and weighted counts per variable.
+
+        The summary includes:
+        - Unweighted counts and percentages.
+        - Weighted counts and percentages.
+        - Minimum and maximum weights per category.
         """
         for var in self.spec.keys():
-            print(f"--- Summary for Variable: {var} ---")
+            # Unweighted counts.
+            unweighted_pdf = self.data.groupBy(var).count().toPandas()
+            unweighted_pdf.rename(columns={"count": "Unweighted Count"}, inplace=True)
+            total_unweighted = unweighted_pdf["Unweighted Count"].sum()
+            unweighted_pdf["Unweighted %"] = (unweighted_pdf["Unweighted Count"] / total_unweighted) * 100
 
-            # 1. Unweighted counts
-            # We'll assume "unweighted" means counting rows ignoring any pre_weight
-            unweighted_counts = (
-                self.df.groupBy(var)
-                .count()
-                .withColumnRenamed("count", "Unweighted_Count")
-            )
+            # Weighted statistics.
+            weighted_pdf = self.data.groupBy(var).agg(
+                F.sum(self.weight_col_name).alias("Weighted_Count"),
+                F.min(self.weight_col_name).alias("Min_Weight"),
+                F.max(self.weight_col_name).alias("Max_Weight")
+            ).toPandas()
+            total_weighted = weighted_pdf["Weighted_Count"].sum()
+            weighted_pdf["Weighted %"] = (weighted_pdf["Weighted_Count"] / total_weighted) * 100
 
-            # 2. Weighted counts
-            weighted_counts = (
-                self.df.groupBy(var)
-                .agg(
-                    F.sum(self.weight_col_name).alias("Weighted_Count"),
-                    F.min(self.weight_col_name).alias("Min_Weight"),
-                    F.max(self.weight_col_name).alias("Max_Weight")
-                )
-            )
-
-            # We'll collect the sums so we can compute Weighted %
-            total_weighted = weighted_counts.agg(F.sum("Weighted_Count")).collect()[0][0]
-
-            # 3. Combine unweighted + weighted
-            summary_df = (
-                unweighted_counts.join(weighted_counts, on=var, how="outer")
-                .fillna(0, subset=["Unweighted_Count", "Weighted_Count", "Min_Weight", "Max_Weight"])
-                .withColumn(
-                    "Unweighted_Percent",
-                    F.col("Unweighted_Count") * 100.0 / self.total_sample
-                )
-                .withColumn(
-                    "Weighted_Percent",
-                    F.when(F.lit(total_weighted) != 0,
-                           F.col("Weighted_Count") * 100.0 / F.lit(total_weighted))
-                     .otherwise(F.lit(0.0))
-                )
-            )
-
-            # Collect to Python for printing
-            rows = summary_df.collect()
-            # Print nicely
-            print(f"{var:20s} | Unweighted_Count | Unweighted_% | Weighted_Count | Weighted_% | Min_Weight | Max_Weight")
-            for r in rows:
-                print(
-                    f"{str(r[var]):20s} | "
-                    f"{r['Unweighted_Count']:15.0f} | "
-                    f"{r['Unweighted_Percent']:11.2f} | "
-                    f"{r['Weighted_Count']:13.2f} | "
-                    f"{r['Weighted_Percent']:10.2f} | "
-                    f"{r['Min_Weight']:10.4f} | "
-                    f"{r['Max_Weight']:10.4f}"
-                )
-            print()  # blank line
+            # Merge the unweighted and weighted summaries.
+            summary_df = pd.merge(unweighted_pdf, weighted_pdf, on=var, how="outer").fillna(0)
+            print(tabulate(summary_df, headers="keys", tablefmt="github", floatfmt=".4f"))
+            print("\n")
