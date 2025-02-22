@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "rim_weighting"
-version = "0.1.3"
+version = "0.1.4"
 description = "A Python package for RIM weighting using Pandas and PySpark."
 authors = [
     { name = "Amit Mohite", email = "amit.mohite@outlook.com" }
