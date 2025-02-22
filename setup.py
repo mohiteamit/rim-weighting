@@ -2,7 +2,7 @@ from setuptools import setup, find_packages
 
 setup(
     name="rim_weighting",
-    version="0.1.4",
+    version="0.1.5",
     author="Amit Mohite",
     author_email="amit.mohite@outlook.com",
     description="A Python implementation of the Random Iterative Method (RIM) weighting algorithm for survey data adjustment.",
@@ -17,9 +17,11 @@ setup(
     ],
     python_requires=">=3.7",
     install_requires=[
-        "pandas>=1.2.0",
-        "numpy>=1.19.0",
-        "tabulate>=0.8.0"
+        "pandas",
+        "numpy",
+        "pytest",
+        "tabulate",
+        "pyspark"
     ],
     include_package_data=True,
     package_data={
