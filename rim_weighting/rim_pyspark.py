@@ -1,6 +1,7 @@
 from typing import Dict
+import math
 from pyspark.sql import SparkSession, DataFrame
-from pyspark.sql.functions import col, lit, when, sum as spark_sum, count, sqrt
+from pyspark.sql.functions import col, lit, when, sum as spark_sum
 
 class RIMWeightingPySpark:
     def __init__(
@@ -91,9 +92,13 @@ class RIMWeightingPySpark:
                     cat, observed = row[var], row["weighted"]
                     target_value = targets.get(cat, 0)
                     rms_error += (target_value - observed) ** 2
-            
-            rms_error = sqrt(rms_error / len(self.spec))
+
+            # Use Python's math.sqrt for a numeric value.
+            rms_error = math.sqrt(rms_error / len(self.spec))
             print(f"Iteration {iteration + 1}: RMS Error = {rms_error:.6f}")
+
+
+
             if rms_error < self.tolerance:
                 print(f"✅ Converged in {iteration + 1} iterations.")
                 break
