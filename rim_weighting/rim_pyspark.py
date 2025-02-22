@@ -2,7 +2,7 @@ from typing import Dict
 from pyspark.sql import SparkSession, DataFrame
 from pyspark.sql.functions import col, lit, when, sum as spark_sum, count, sqrt
 
-class RIMWeightingSpark:
+class RIMWeightingPySpark:
     def __init__(
         self,
         spark: SparkSession,
@@ -60,18 +60,17 @@ class RIMWeightingSpark:
                 current_totals = (
                     self.data.groupBy(var)
                     .agg(spark_sum(self.weight_col_name).alias("observed"))
-                )
-                adjustment_factors = {cat: targets[cat] / observed if observed > 0 else 1.0 
-                                      for cat, observed in current_totals.collect()}
-
-                self.data = self.data.withColumn(
-                    self.weight_col_name,
-                    col(self.weight_col_name) * when(
-                        col(var).isin(list(adjustment_factors.keys())),
-                        col(var).cast("string").map(adjustment_factors)
-                    ).otherwise(1.0)
-                )
-
+                ).collect()
+                
+                adjustment_factors = {row[var]: targets[row[var]] / row["observed"] if row["observed"] > 0 else 1.0 
+                                      for row in current_totals}
+                
+                mapping_expr = when(col(var).isNull(), 1.0)
+                for cat, factor in adjustment_factors.items():
+                    mapping_expr = mapping_expr.when(col(var) == cat, factor)
+                
+                self.data = self.data.withColumn(self.weight_col_name, col(self.weight_col_name) * mapping_expr)
+            
             total_weight_sum = self.data.agg(spark_sum(self.weight_col_name)).collect()[0][0]
             scale_factor = self.target / total_weight_sum if total_weight_sum > 0 else 1.0
             self.data = self.data.withColumn(self.weight_col_name, col(self.weight_col_name) * scale_factor)
@@ -81,20 +80,19 @@ class RIMWeightingSpark:
                 .when(col(self.weight_col_name) > max_weight, max_weight)
                 .otherwise(col(self.weight_col_name))
             )
-
+            
             rms_error = 0.0
             for var, targets in self.spec.items():
                 weighted_totals = (
                     self.data.groupBy(var)
                     .agg(spark_sum(self.weight_col_name).alias("weighted"))
-                )
-                for cat, target_value in targets.items():
-                    observed = weighted_totals.filter(col(var) == cat).select("weighted").collect()
-                    observed = observed[0][0] if observed else 0
+                ).collect()
+                for row in weighted_totals:
+                    cat, observed = row[var], row["weighted"]
+                    target_value = targets.get(cat, 0)
                     rms_error += (target_value - observed) ** 2
             
-            rms_error = self.spark.createDataFrame([(sqrt(rms_error / len(self.spec)),)], ["rms_error"]).collect()[0][0]
-
+            rms_error = sqrt(rms_error / len(self.spec))
             print(f"Iteration {iteration + 1}: RMS Error = {rms_error:.6f}")
             if rms_error < self.tolerance:
                 print(f"✅ Converged in {iteration + 1} iterations.")
